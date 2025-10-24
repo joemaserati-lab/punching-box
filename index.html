@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Punching Box Demo</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Trebuchet MS", Arial, sans-serif;
+        overflow: hidden;
+        cursor: none;
+        background: radial-gradient(
+          circle at top,
+          #1a1f3b 0%,
+          #050612 60%,
+          #000
+        );
+        color: #f5f5f5;
+      }
+
+      #overlay {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        padding: 12px 16px;
+        background: rgba(0, 0, 0, 0.4);
+        border-radius: 8px;
+        backdrop-filter: blur(6px);
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+      }
+
+      #overlay h1 {
+        margin: 0 0 6px;
+        font-size: 20px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      #overlay p {
+        margin: 4px 0;
+        font-size: 14px;
+      }
+
+      #score {
+        font-size: 28px;
+        font-weight: 700;
+        color: #ffb347;
+      }
+
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="overlay">
+      <h1>Punching Box</h1>
+      <p>Punteggio: <span id="score">0</span></p>
+      <p>Muovi il mouse per controllare il guantone.</p>
+      <p>Clicca con il tasto sinistro per colpire le forme.</p>
+    </div>
+    <script type="module">
+      import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js";
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x050608);
+
+      const camera = new THREE.PerspectiveCamera(
+        60,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        100,
+      );
+      camera.position.set(0, 2, 6);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      document.body.appendChild(renderer.domElement);
+
+      const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambient);
+
+      const dirLight = new THREE.DirectionalLight(0xfff0dd, 0.8);
+      dirLight.position.set(-3, 6, 4);
+      scene.add(dirLight);
+
+      const floorGeometry = new THREE.PlaneGeometry(20, 20);
+      const floorMaterial = new THREE.MeshPhongMaterial({
+        color: 0x10121a,
+        shininess: 10,
+      });
+      const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.y = -2;
+      scene.add(floor);
+
+      const gloveGroup = new THREE.Group();
+      scene.add(gloveGroup);
+
+      function createGlove() {
+        const materialPalm = new THREE.MeshStandardMaterial({
+          color: 0xd92027,
+          roughness: 0.4,
+          metalness: 0.1,
+        });
+        const materialWrist = new THREE.MeshStandardMaterial({
+          color: 0x701010,
+          roughness: 0.5,
+        });
+
+        const palm = new THREE.Mesh(
+          new THREE.BoxGeometry(0.9, 0.8, 1),
+          materialPalm,
+        );
+        palm.position.set(0, 0.25, 0);
+        palm.castShadow = true;
+        gloveGroup.add(palm);
+
+        const wrist = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.35, 0.45, 0.7, 24),
+          materialWrist,
+        );
+        wrist.rotation.z = Math.PI / 2;
+        wrist.position.set(-0.7, 0.1, 0);
+        gloveGroup.add(wrist);
+
+        const thumb = new THREE.Mesh(
+          new THREE.CapsuleGeometry(0.18, 0.25, 8, 16),
+          materialPalm,
+        );
+        thumb.position.set(0.35, 0.1, 0.35);
+        thumb.rotation.z = -Math.PI / 4;
+        gloveGroup.add(thumb);
+
+        const fingerGeometry = new THREE.CapsuleGeometry(0.16, 0.35, 8, 16);
+        const fingerOffsets = [-0.25, -0.05, 0.15, 0.35];
+        fingerOffsets.forEach((offset, index) => {
+          const finger = new THREE.Mesh(fingerGeometry, materialPalm);
+          finger.position.set(0.2, 0.45, offset - 0.15);
+          finger.rotation.x = -0.2 * index;
+          gloveGroup.add(finger);
+        });
+
+        gloveGroup.rotation.set(0, Math.PI, 0);
+        gloveGroup.scale.set(0.8, 0.8, 0.8);
+      }
+
+      createGlove();
+
+      const mouse = new THREE.Vector2();
+      const ndcPointer = new THREE.Vector2();
+      const raycaster = new THREE.Raycaster();
+      raycaster.params.Mesh.threshold = 0.2;
+      const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -1.5);
+      const planeIntersection = new THREE.Vector3();
+      const projectedPosition = new THREE.Vector3();
+
+      const fallingObjects = [];
+      const spawnArea = {
+        width: 6,
+        depth: 4,
+        height: 6,
+      };
+
+      let spawnTimer = 0;
+      let score = 0;
+      const scoreElement = document.getElementById("score");
+
+      const punchState = {
+        active: false,
+        start: new THREE.Vector3(),
+        target: new THREE.Vector3(),
+        progress: 0,
+        hitObject: null,
+      };
+      const punchDirection = new THREE.Vector3();
+      const punchOffset = new THREE.Vector3();
+
+      function spawnFallingObject() {
+        const geometries = [
+          new THREE.BoxGeometry(0.8, 0.8, 0.8),
+          new THREE.SphereGeometry(0.5, 24, 24),
+          new THREE.ConeGeometry(0.5, 0.9, 24),
+          new THREE.CylinderGeometry(0.45, 0.45, 0.9, 24),
+        ];
+        const colors = [0x65def1, 0xf9f871, 0xff9671, 0xb39ddb, 0x7dd87d];
+        const geometry =
+          geometries[Math.floor(Math.random() * geometries.length)].clone();
+        if (!geometry.boundingSphere) {
+          geometry.computeBoundingSphere();
+        }
+        const material = new THREE.MeshStandardMaterial({
+          color: colors[Math.floor(Math.random() * colors.length)],
+          roughness: 0.35,
+          metalness: 0.2,
+        });
+
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(
+          (Math.random() - 0.5) * spawnArea.width,
+          spawnArea.height,
+          (Math.random() - 0.5) * spawnArea.depth,
+        );
+        mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+
+        scene.add(mesh);
+        fallingObjects.push({
+          mesh,
+          velocity: new THREE.Vector3(
+            (Math.random() - 0.5) * 0.12,
+            -0.26 - Math.random() * 0.18,
+            (Math.random() - 0.5) * 0.12,
+          ),
+          rotationSpeed: new THREE.Vector3(
+            Math.random() * 0.004,
+            Math.random() * 0.004,
+            Math.random() * 0.004,
+          ),
+        });
+      }
+
+      function updateFallingObjects(delta) {
+        for (let i = fallingObjects.length - 1; i >= 0; i -= 1) {
+          const obj = fallingObjects[i];
+          obj.mesh.position.addScaledVector(obj.velocity, delta * 60);
+          obj.mesh.rotation.x += obj.rotationSpeed.x * delta * 60;
+          obj.mesh.rotation.y += obj.rotationSpeed.y * delta * 60;
+          obj.mesh.rotation.z += obj.rotationSpeed.z * delta * 60;
+
+          if (obj.mesh.position.y < -3) {
+            scene.remove(obj.mesh);
+            fallingObjects.splice(i, 1);
+          }
+        }
+      }
+
+      function updatePointerFromEvent(event, targetVector = ndcPointer) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        targetVector.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        targetVector.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      }
+
+      function findClickableObject(event) {
+        updatePointerFromEvent(event, mouse);
+        ndcPointer.copy(mouse);
+
+        raycaster.setFromCamera(ndcPointer, camera);
+        const meshes = fallingObjects.map((obj) => obj.mesh);
+        const intersections = raycaster.intersectObjects(meshes, false);
+        if (intersections.length > 0) {
+          return intersections[0];
+        }
+
+        let fallback = null;
+        let shortest = Infinity;
+
+        for (const obj of fallingObjects) {
+          projectedPosition.copy(obj.mesh.position).project(camera);
+          const dx = projectedPosition.x - ndcPointer.x;
+          const dy = projectedPosition.y - ndcPointer.y;
+          const distance = Math.hypot(dx, dy);
+          const radius = obj.mesh.geometry.boundingSphere
+            ? obj.mesh.geometry.boundingSphere.radius
+            : 0.6;
+          const screenThreshold = 0.18 + radius * 0.08;
+          if (distance < screenThreshold && distance < shortest) {
+            fallback = {
+              object: obj.mesh,
+              point: obj.mesh.getWorldPosition(new THREE.Vector3()),
+            };
+            shortest = distance;
+          }
+        }
+
+        return fallback;
+      }
+
+      function updateGlovePosition() {
+        if (punchState.active) {
+          return;
+        }
+        raycaster.setFromCamera(mouse, camera);
+        if (raycaster.ray.intersectPlane(plane, planeIntersection)) {
+          gloveGroup.position.lerp(planeIntersection, 0.45);
+          gloveGroup.lookAt(
+            planeIntersection.x,
+            planeIntersection.y,
+            planeIntersection.z - 1,
+          );
+        }
+      }
+
+      function animatePunch(delta) {
+        if (!punchState.active) {
+          return;
+        }
+
+        punchState.progress += delta * 2.5;
+
+        const eased =
+          punchState.progress < 0.5
+            ? 2 * punchState.progress * punchState.progress
+            : -1 + (4 - 2 * punchState.progress) * punchState.progress;
+
+        punchDirection.copy(punchState.target).sub(punchState.start);
+
+        const reach = Math.min(punchDirection.length(), 1.5);
+        if (reach > 0) {
+          punchDirection.setLength(reach);
+        }
+
+        if (punchState.progress <= 0.5) {
+          punchOffset.copy(punchDirection).multiplyScalar(eased);
+        } else {
+          punchOffset.copy(punchDirection).multiplyScalar(1 - eased);
+        }
+
+        gloveGroup.position.copy(punchState.start).add(punchOffset);
+        if (reach > 0) {
+          gloveGroup.lookAt(
+            gloveGroup.position.x + punchDirection.x,
+            gloveGroup.position.y + punchDirection.y,
+            gloveGroup.position.z + punchDirection.z,
+          );
+        }
+
+        if (punchState.hitObject && punchState.progress >= 0.3) {
+          scene.remove(punchState.hitObject);
+          const index = fallingObjects.findIndex(
+            (obj) => obj.mesh === punchState.hitObject,
+          );
+          if (index !== -1) {
+            fallingObjects.splice(index, 1);
+          }
+          punchState.hitObject = null;
+          score += 1;
+          scoreElement.textContent = score.toString();
+        }
+
+        if (punchState.progress >= 1) {
+          punchState.active = false;
+          gloveGroup.position.copy(punchState.start);
+        }
+      }
+
+      const clock = new THREE.Clock();
+
+      function animate() {
+        const delta = clock.getDelta();
+
+        spawnTimer += delta;
+        if (spawnTimer > 2.3 && fallingObjects.length < 8) {
+          spawnFallingObject();
+          spawnTimer = 0;
+        }
+
+        updateFallingObjects(delta);
+        updateGlovePosition();
+        animatePunch(delta);
+
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      }
+
+      animate();
+
+      window.addEventListener("mousemove", (event) => {
+        updatePointerFromEvent(event, mouse);
+      });
+
+      window.addEventListener("mousedown", (event) => {
+        if (event.button !== 0 || punchState.active) {
+          return;
+        }
+
+        const hit = findClickableObject(event);
+        if (!hit) {
+          return;
+        }
+
+        punchState.active = true;
+        punchState.progress = 0;
+        punchState.start.copy(gloveGroup.position);
+        punchState.target.copy(hit.point);
+        punchState.hitObject = hit.object;
+      });
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    </script>
+  </body>
+</html>
