@@ -27,6 +27,7 @@
         border-radius: 8px;
         backdrop-filter: blur(6px);
         box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+        pointer-events: none;
       }
 
       #overlay h1 {
@@ -200,14 +201,14 @@
         fallingObjects.push({
           mesh,
           velocity: new THREE.Vector3(
-            (Math.random() - 0.5) * 0.3,
-            -0.8 - Math.random() * 0.7,
-            (Math.random() - 0.5) * 0.3
+            (Math.random() - 0.5) * 0.18,
+            -0.45 - Math.random() * 0.35,
+            (Math.random() - 0.5) * 0.18
           ),
           rotationSpeed: new THREE.Vector3(
-            Math.random() * 0.01,
-            Math.random() * 0.01,
-            Math.random() * 0.01
+            Math.random() * 0.008,
+            Math.random() * 0.008,
+            Math.random() * 0.008
           ),
         });
       }
@@ -300,7 +301,7 @@
         const delta = clock.getDelta();
 
         spawnTimer += delta;
-        if (spawnTimer > 1.2) {
+        if (spawnTimer > 1.6) {
           spawnFallingObject();
           spawnTimer = 0;
         }
@@ -324,6 +325,10 @@
         if (event.button !== 0 || punchState.active) {
           return;
         }
+
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
         raycaster.setFromCamera(mouse, camera);
         const intersects = raycaster.intersectObjects(fallingObjects.map((obj) => obj.mesh));
