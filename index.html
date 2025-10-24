@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="it">
   <head>
     <meta charset="UTF-8" />
@@ -14,7 +14,12 @@
         font-family: "Trebuchet MS", Arial, sans-serif;
         overflow: hidden;
         cursor: none;
-        background: radial-gradient(circle at top, #1a1f3b 0%, #050612 60%, #000);
+        background: radial-gradient(
+          circle at top,
+          #1a1f3b 0%,
+          #050612 60%,
+          #000
+        );
         color: #f5f5f5;
       }
 
@@ -70,7 +75,7 @@
         60,
         window.innerWidth / window.innerHeight,
         0.1,
-        100
+        100,
       );
       camera.position.set(0, 2, 6);
 
@@ -110,14 +115,17 @@
           roughness: 0.5,
         });
 
-        const palm = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.8, 1), materialPalm);
+        const palm = new THREE.Mesh(
+          new THREE.BoxGeometry(0.9, 0.8, 1),
+          materialPalm,
+        );
         palm.position.set(0, 0.25, 0);
         palm.castShadow = true;
         gloveGroup.add(palm);
 
         const wrist = new THREE.Mesh(
           new THREE.CylinderGeometry(0.35, 0.45, 0.7, 24),
-          materialWrist
+          materialWrist,
         );
         wrist.rotation.z = Math.PI / 2;
         wrist.position.set(-0.7, 0.1, 0);
@@ -125,7 +133,7 @@
 
         const thumb = new THREE.Mesh(
           new THREE.CapsuleGeometry(0.18, 0.25, 8, 16),
-          materialPalm
+          materialPalm,
         );
         thumb.position.set(0.35, 0.1, 0.35);
         thumb.rotation.z = -Math.PI / 4;
@@ -147,9 +155,12 @@
       createGlove();
 
       const mouse = new THREE.Vector2();
+      const ndcPointer = new THREE.Vector2();
       const raycaster = new THREE.Raycaster();
+      raycaster.params.Mesh.threshold = 0.2;
       const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -1.5);
       const planeIntersection = new THREE.Vector3();
+      const projectedPosition = new THREE.Vector3();
 
       const fallingObjects = [];
       const spawnArea = {
@@ -180,7 +191,11 @@
           new THREE.CylinderGeometry(0.45, 0.45, 0.9, 24),
         ];
         const colors = [0x65def1, 0xf9f871, 0xff9671, 0xb39ddb, 0x7dd87d];
-        const geometry = geometries[Math.floor(Math.random() * geometries.length)].clone();
+        const geometry =
+          geometries[Math.floor(Math.random() * geometries.length)].clone();
+        if (!geometry.boundingSphere) {
+          geometry.computeBoundingSphere();
+        }
         const material = new THREE.MeshStandardMaterial({
           color: colors[Math.floor(Math.random() * colors.length)],
           roughness: 0.35,
@@ -191,7 +206,7 @@
         mesh.position.set(
           (Math.random() - 0.5) * spawnArea.width,
           spawnArea.height,
-          (Math.random() - 0.5) * spawnArea.depth
+          (Math.random() - 0.5) * spawnArea.depth,
         );
         mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
         mesh.castShadow = true;
@@ -201,14 +216,14 @@
         fallingObjects.push({
           mesh,
           velocity: new THREE.Vector3(
-            (Math.random() - 0.5) * 0.18,
-            -0.45 - Math.random() * 0.35,
-            (Math.random() - 0.5) * 0.18
+            (Math.random() - 0.5) * 0.12,
+            -0.26 - Math.random() * 0.18,
+            (Math.random() - 0.5) * 0.12,
           ),
           rotationSpeed: new THREE.Vector3(
-            Math.random() * 0.008,
-            Math.random() * 0.008,
-            Math.random() * 0.008
+            Math.random() * 0.004,
+            Math.random() * 0.004,
+            Math.random() * 0.004,
           ),
         });
       }
@@ -228,17 +243,58 @@
         }
       }
 
+      function updatePointerFromEvent(event, targetVector = ndcPointer) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        targetVector.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        targetVector.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      }
+
+      function findClickableObject(event) {
+        updatePointerFromEvent(event, mouse);
+        ndcPointer.copy(mouse);
+
+        raycaster.setFromCamera(ndcPointer, camera);
+        const meshes = fallingObjects.map((obj) => obj.mesh);
+        const intersections = raycaster.intersectObjects(meshes, false);
+        if (intersections.length > 0) {
+          return intersections[0];
+        }
+
+        let fallback = null;
+        let shortest = Infinity;
+
+        for (const obj of fallingObjects) {
+          projectedPosition.copy(obj.mesh.position).project(camera);
+          const dx = projectedPosition.x - ndcPointer.x;
+          const dy = projectedPosition.y - ndcPointer.y;
+          const distance = Math.hypot(dx, dy);
+          const radius = obj.mesh.geometry.boundingSphere
+            ? obj.mesh.geometry.boundingSphere.radius
+            : 0.6;
+          const screenThreshold = 0.18 + radius * 0.08;
+          if (distance < screenThreshold && distance < shortest) {
+            fallback = {
+              object: obj.mesh,
+              point: obj.mesh.getWorldPosition(new THREE.Vector3()),
+            };
+            shortest = distance;
+          }
+        }
+
+        return fallback;
+      }
+
       function updateGlovePosition() {
         if (punchState.active) {
           return;
         }
         raycaster.setFromCamera(mouse, camera);
         if (raycaster.ray.intersectPlane(plane, planeIntersection)) {
-          gloveGroup.position.lerp(planeIntersection, 0.3);
+          gloveGroup.position.lerp(planeIntersection, 0.45);
           gloveGroup.lookAt(
             planeIntersection.x,
             planeIntersection.y,
-            planeIntersection.z - 1
+            planeIntersection.z - 1,
           );
         }
       }
@@ -250,13 +306,12 @@
 
         punchState.progress += delta * 2.5;
 
-        const eased = punchState.progress < 0.5
-          ? 2 * punchState.progress * punchState.progress
-          : -1 + (4 - 2 * punchState.progress) * punchState.progress;
+        const eased =
+          punchState.progress < 0.5
+            ? 2 * punchState.progress * punchState.progress
+            : -1 + (4 - 2 * punchState.progress) * punchState.progress;
 
-        punchDirection
-          .copy(punchState.target)
-          .sub(punchState.start);
+        punchDirection.copy(punchState.target).sub(punchState.start);
 
         const reach = Math.min(punchDirection.length(), 1.5);
         if (reach > 0) {
@@ -274,13 +329,15 @@
           gloveGroup.lookAt(
             gloveGroup.position.x + punchDirection.x,
             gloveGroup.position.y + punchDirection.y,
-            gloveGroup.position.z + punchDirection.z
+            gloveGroup.position.z + punchDirection.z,
           );
         }
 
         if (punchState.hitObject && punchState.progress >= 0.3) {
           scene.remove(punchState.hitObject);
-          const index = fallingObjects.findIndex((obj) => obj.mesh === punchState.hitObject);
+          const index = fallingObjects.findIndex(
+            (obj) => obj.mesh === punchState.hitObject,
+          );
           if (index !== -1) {
             fallingObjects.splice(index, 1);
           }
@@ -301,7 +358,7 @@
         const delta = clock.getDelta();
 
         spawnTimer += delta;
-        if (spawnTimer > 1.6) {
+        if (spawnTimer > 2.3 && fallingObjects.length < 8) {
           spawnFallingObject();
           spawnTimer = 0;
         }
@@ -317,8 +374,7 @@
       animate();
 
       window.addEventListener("mousemove", (event) => {
-        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        updatePointerFromEvent(event, mouse);
       });
 
       window.addEventListener("mousedown", (event) => {
@@ -326,22 +382,16 @@
           return;
         }
 
-        const rect = renderer.domElement.getBoundingClientRect();
-        mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-        raycaster.setFromCamera(mouse, camera);
-        const intersects = raycaster.intersectObjects(fallingObjects.map((obj) => obj.mesh));
-
-        if (intersects.length === 0) {
+        const hit = findClickableObject(event);
+        if (!hit) {
           return;
         }
 
         punchState.active = true;
         punchState.progress = 0;
         punchState.start.copy(gloveGroup.position);
-        punchState.target.copy(intersects[0].point);
-        punchState.hitObject = intersects[0].object;
+        punchState.target.copy(hit.point);
+        punchState.hitObject = hit.object;
       });
 
       window.addEventListener("resize", () => {
